@@ -1,6 +1,5 @@
 from typing import Annotated
 import numpy as np
-from util import dtype_dataclass, dtype_array
 
 U8 = np.dtype("u1")
 U16 = np.dtype("<u2")
