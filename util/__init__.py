@@ -154,9 +154,9 @@ def generate_fix_init_spec(
         gender = int((rng.next_rand(253) + 1) < gender_ratio)
     nature = rng.next_rand(25)
     if is_alpha:
-        height = weight = 255
+        height = weight = np.uint8(255)
     else:
-        height = rng.next_rand(0x81) + rng.next_rand(0x80)
-        weight = rng.next_rand(0x81) + rng.next_rand(0x80)
+        height = np.uint8(rng.next_rand(0x81) + rng.next_rand(0x80))
+        weight = np.uint8(rng.next_rand(0x81) + rng.next_rand(0x80))
 
     return shiny, encryption_constant, pid, ivs, ability, gender, nature, height, weight
