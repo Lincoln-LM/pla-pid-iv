@@ -8,6 +8,7 @@ from numba_pokemon_prngs.data.personal import PERSONAL_INFO_LA, PersonalInfo8LA
 import pla_reverse.pla_reverse as pla_reverse
 from pa8 import PA8
 
+
 def xoroshiro128plus_next(
     seed0: np.uint64, seed1: np.uint64
 ) -> tuple[np.uint64, np.uint64]:
@@ -18,61 +19,55 @@ def xoroshiro128plus_next(
 
 
 def ec_pid_matrix(shiny_rolls: int) -> np.ndarray:
-    """Build fixed_seed -> ec/pid matrix"""
-    mat = np.zeros((64, 64), np.uint8)
-    for bit in range(64):
-        seed0, seed1 = np.uint64(1 << bit), np.uint64(0)
-        if bit < 32:
-            mat[bit, bit] = 1  # ec
+    """Build matrix mapping from fixed_seed high -> pid low"""
+    mat = np.zeros((32, 32), np.uint8)
+    for bit in range(32):
+        seed0, seed1 = np.uint64(1 << (bit + 32)), np.uint64(0)
         seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # ec
         seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # tidsid
         for _ in range(shiny_rolls - 1):
             seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # pid
         for pid_bit in range(16):
-            mat[bit, 32 + pid_bit] = (seed0 >> np.uint64(pid_bit)) & np.uint64(1)
-            mat[bit, 32 + 16 + pid_bit] = (seed1 >> np.uint64(pid_bit)) & np.uint64(1)
+            mat[bit, pid_bit] = (seed0 >> np.uint64(pid_bit)) & np.uint64(1)
+            mat[bit, 16 + pid_bit] = (seed1 >> np.uint64(pid_bit)) & np.uint64(1)
     return mat
 
 
-def ec_pid_const(shiny_rolls: int) -> np.array:
-    """Compute the xoroshiro constant's impact on ec/pid"""
-    vec = np.zeros(64, np.uint8)
-    seed0, seed1 = np.uint64(0), np.uint64(0x82A2B175229D6A5B)
+def ec_pid_const(fixed_seed_low: int, shiny_rolls: int) -> np.array:
+    """Compute the xoroshiro constant & fixed_seed low's impact on pid low"""
+    vec = np.zeros(32, np.uint8)
+    seed0, seed1 = np.uint64(fixed_seed_low), np.uint64(0x82A2B175229D6A5B)
     seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # ec
     seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # tidsid
     for _ in range(shiny_rolls - 1):
         seed0, seed1 = xoroshiro128plus_next(seed0, seed1)  # pid
     for bit in range(16):
-        vec[32 + bit] = (seed0 >> np.uint64(bit)) & np.uint64(1)
-        vec[32 + 16 + bit] = (seed1 >> np.uint64(bit)) & np.uint64(1)
+        vec[bit] = (seed0 >> np.uint64(bit)) & np.uint64(1)
+        vec[16 + bit] = (seed1 >> np.uint64(bit)) & np.uint64(1)
 
     return vec
 
 
 @numba.njit
 def find_test_seeds_ec_pid(
-    encryption_constant: np.uint32,
-    pid: np.uint32,
+    pid_low: np.uint16,
     seed_mat: np.ndarray,
     nullspace: np.ndarray,
     xoro_const: np.uint64,
 ):
-    ec_s0 = (encryption_constant - 0x229D6A5B) & 0xFFFFFFFF
-    pid_low = pid & 0xFFFF
+    """Find a list of fixed_seed high values that map to the given pid low"""
     seeds = np.empty(0x10000 * len(nullspace), np.uint64)
     seed_i = 0
     for pid_s1 in range(0x10000):
         pid_s0 = (pid_low - pid_s1) & 0xFFFF
-        ec_pid_vec = (
-            np.uint64(ec_s0) | (np.uint64(pid_s0) << 32) | (np.uint64(pid_s1) << 48)
-        ) ^ xoro_const
+        pid_vec = (np.uint64(pid_s0) | (np.uint64(pid_s1) << 16)) ^ xoro_const
 
         base_seed = np.uint64(0)
         i = 0
-        while ec_pid_vec:
-            if ec_pid_vec & 1:
+        while pid_vec:
+            if pid_vec & 1:
                 base_seed ^= seed_mat[i]
-            ec_pid_vec >>= 1
+            pid_vec >>= 1
             i += 1
         for nullspace_vector in nullspace:
             seeds[seed_i] = base_seed ^ nullspace_vector
@@ -87,6 +82,7 @@ def find_fixed_seeds_ec_pid(
     shiny_rolls: np.uint8,
     shiny_locked: np.bool8,
 ):
+    fixed_seed_low = (encryption_constant - 0x229D6A5B) & 0xFFFFFFFF
     nullspace = np.array(
         tuple(
             pla_reverse.matrix.vec_to_int(row)
@@ -103,10 +99,13 @@ def find_fixed_seeds_ec_pid(
         ),
         np.uint64,
     )
-    xoro_const = np.uint64(pla_reverse.matrix.vec_to_int(ec_pid_const(shiny_rolls)))
+    xoro_const = np.uint64(
+        pla_reverse.matrix.vec_to_int(ec_pid_const(fixed_seed_low, shiny_rolls))
+    )
 
-    test_seeds = find_test_seeds_ec_pid(
-        encryption_constant, pid, seed_mat, nullspace, xoro_const
+    test_seeds = np.uint64(fixed_seed_low) | (
+        find_test_seeds_ec_pid(pid & 0xFFFF, seed_mat, nullspace, xoro_const)
+        << np.uint64(32)
     )
 
     return test_seeds[
@@ -197,6 +196,7 @@ def verify_all_seeds(seeds, pokemon_pid, tsv, shiny_rolls, shiny_locked):
             )
         bools[i] = pid == pokemon_pid
     return bools
+
 
 if __name__ == "__main__":
     SHINY_LOCKED = False
